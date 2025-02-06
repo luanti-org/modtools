@@ -122,7 +122,7 @@ def main():
 def compile_func_call_pattern(argument_pattern):
 	return re.compile(
 		# Look for beginning of file or anything that isn't a function identifier
-		r'(?:^|[\.=,\[{\(\s])' +
+		r'(?<![a-zA-Z0-9_])' +
 		# Matches S, FS, NS, or NFS function call
 		r'N?F?S\s*' +
 		# The pattern to match argument
