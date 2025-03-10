@@ -11,6 +11,7 @@
 import os, fnmatch, re, shutil, errno
 from sys import argv as _argv
 from sys import stderr as _stderr
+from collections import defaultdict
 
 # Running params
 params = {"recursive": False,
@@ -39,8 +40,8 @@ doublespace_threshold = 80
 
 # These symbols mark comment lines showing the source file name.
 # A comment may look like "##[ init.lua ]##".
-symbol_source_prefix = "##["
-symbol_source_suffix = "]##"
+symbol_source_prefix = "##[ "
+symbol_source_suffix = " ]##"
 
 # comment to mark the section of old/unused strings
 comment_unused = "##### not used anymore #####"
@@ -205,17 +206,6 @@ def get_existing_tr_files(folder):
 				out.append(name)
 	return out
 
-# from https://stackoverflow.com/questions/600268/mkdir-p-functionality-in-python/600612#600612
-# Creates a directory if it doesn't exist, silently does
-# nothing if it already exists
-def mkdir_p(path):
-	try:
-		os.makedirs(path)
-	except OSError as exc: # Python >2.5
-		if exc.errno == errno.EEXIST and os.path.isdir(path):
-			pass
-		else: raise
-
 # Converts the template dictionary to a text to be written as a file
 # dKeyStrings is a dictionary of localized string to source file sets
 # dOld is a dictionary of existing translations and comments from
@@ -233,17 +223,13 @@ def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain, te
 	if header_comments is not None:
 		lOut.append(header_comments)
 
-	dGroupedBySource = {}
+	dGroupedBySource = defaultdict(list)
 
-	for key in dkeyStrings:
-		sourceList = list(dkeyStrings[key])
-		sourceString = "\n".join(sourceList)
-		listForSource = dGroupedBySource.get(sourceString, [])
-		listForSource.append(key)
-		dGroupedBySource[sourceString] = listForSource
+	for key, val in dkeyStrings.items():
+		sourceString = "\n".join(val)
+		dGroupedBySource[sourceString].append(key)
 
-	lSourceKeys = list(dGroupedBySource.keys())
-	lSourceKeys.sort()
+	lSourceKeys = list(sorted(dGroupedBySource.keys()))
 	for source in lSourceKeys:
 		localizedStrings = dGroupedBySource[source]
 		if params["print-source"]:
@@ -289,17 +275,6 @@ def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain, te
 					if params["break-long-lines"] and len(key) > doublespace_threshold:
 						lOut.append("")
 	return "\n".join(lOut) + '\n'
-
-# Writes a template.txt file
-# dkeyStrings is the dictionary returned by generate_template
-def write_template(templ_file, dkeyStrings, mod_name):
-	# read existing template file to preserve comments
-	existing_template = import_tr_file(templ_file)
-
-	text = strings_to_text(dkeyStrings, existing_template[0], mod_name, existing_template[2], existing_template[3])
-	mkdir_p(os.path.dirname(templ_file))
-	with open(templ_file, "wt", encoding='utf-8') as template_file:
-		template_file.write(text)
 
 # Gets all translatable strings from a lua file
 def read_lua_file_strings(lua_file):
@@ -414,48 +389,23 @@ def import_tr_file(tr_file):
 					dOut[match.group(1)] = outval
 	return (dOut, text, header_comments, textdomain)
 
-# like os.walk but returns sorted filenames
-def sorted_os_walk(folder):
-	tuples = []
-	t = 0
-	for root, dirs, files in os.walk(folder):
-		tuples.append( (root, dirs, files) )
-		t = t + 1
-
-	tuples = sorted(tuples)
-
-	paths_and_files = []
-	f = 0
-
-	for tu in tuples:
-		root = tu[0]
-		dirs = tu[1]
-		files = tu[2]
-		files = sorted(files, key=str.lower)
-		for filename in files:
-			paths_and_files.append( (os.path.join(root, filename), filename) )
-			f = f + 1
-	return paths_and_files
-
 # Walks all lua files in the mod folder, collects translatable strings,
 # and writes it to a template.txt file
 # Returns a dictionary of localized strings to source file lists
 # that can be used with the strings_to_text function.
 def generate_template(folder, mod_name):
-	dOut = {}
-	paths_and_files = sorted_os_walk(folder)
-	for paf in paths_and_files:
-		fullpath_filename = paf[0]
-		filename = paf[1]
-		if fnmatch.fnmatch(filename, "*.lua"):
+	dOut = defaultdict(set)
+	for root, _, files in sorted(list(os.walk(folder))):
+		for filename in sorted(files, key=str.lower):
+			if not fnmatch.fnmatch(filename, "*.lua"): continue
+			fullpath_filename = os.path.join(root, filename)
+
 			found = read_lua_file_strings(fullpath_filename)
 			if params["verbose"]:
 				print(f"{fullpath_filename}: {str(len(found))} translatable strings")
 
 			for s in found:
-				sources = dOut.get(s, set())
-				sources.add(os.path.relpath(fullpath_filename, start=folder))
-				dOut[s] = sources
+				dOut[s].add(os.path.relpath(fullpath_filename, start=folder))
 
 	if len(dOut) == 0:
 		return (None, None)
@@ -463,17 +413,18 @@ def generate_template(folder, mod_name):
 	# Convert source file set to list, sort it and add comment symbols.
 	# Needed because a set is unsorted and might result in unpredictable.
 	# output orders if any source string appears in multiple files.
-	for d in dOut:
-		sources = dOut.get(d, set())
-		sources = sorted(list(sources), key=str.lower)
-		newSources = []
-		for i in sources:
-			i = i.replace("\\", "/")
-			newSources.append(f"{symbol_source_prefix} {i} {symbol_source_suffix}")
-		dOut[d] = newSources
+	for d, sources in dOut.items():
+		dOut[d] = [symbol_source_prefix + i.replace("\\", "/") +  symbol_source_suffix for i in sorted(sources, key=str.lower)]
 
 	templ_file = os.path.join(folder, "locale/template.txt")
-	write_template(templ_file, dOut, mod_name)
+	if not os.path.exists(os.path.dirname(templ_file)): os.makedirs(os.path.dirname(templ_file))
+
+	# read existing template file to preserve comments
+	existing_template = import_tr_file(templ_file)
+	text = strings_to_text(dOut, existing_template[0], mod_name, existing_template[2], existing_template[3])
+	with open(templ_file, "wt", encoding='utf-8') as template_file:
+		template_file.write(text)
+
 	new_template = import_tr_file(templ_file) # re-import to get all new data
 	return (dOut, new_template)
 
