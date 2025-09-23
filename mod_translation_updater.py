@@ -21,6 +21,7 @@ params = {"recursive": False,
 	"break-long-lines": False,
 	"print-source": False,
 	"truncate-unused": False,
+	"discard-empty": False,
 }
 # Available CLI options
 options = {"recursive": ['--recursive', '-r'],
@@ -30,6 +31,7 @@ options = {"recursive": ['--recursive', '-r'],
 	"break-long-lines": ['--break-long-lines', '-b'],
 	"print-source": ['--print-source', '-p'],
 	"truncate-unused": ['--truncate-unused', '-t'],
+	"discard-empty": ['--discard-empty'],
 }
 
 # Strings longer than this will have extra space added between
@@ -84,6 +86,8 @@ DESCRIPTION
 		add output information
 	{', '.join(options["truncate-unused"])}
 		delete unused strings from files
+	{', '.join(options["discard-empty"])}
+		discards empty translation strings to save space
 ''')
 
 def main():
@@ -119,15 +123,16 @@ def main():
 				update_folder(os.path.abspath("./"))
 
 # Compile pattern for matching lua function call
-def compile_func_call_pattern(argument_pattern):
+# flag = re.DOTALL : Allow matching multiple lines
+# flag = re.NOFLAG : Match single lines only
+def compile_func_call_pattern(argument_pattern: str, flag):
 	return re.compile(
 		# Look for beginning of file or anything that isn't a function identifier
 		r'(?<![a-zA-Z0-9_])' +
 		# Matches S, FS, NS, or NFS function call
 		r'N?F?S\s*' +
 		# The pattern to match argument
-		argument_pattern,
-		re.DOTALL)
+		argument_pattern, flag)
 
 # Add parentheses around a pattern
 def parenthesize_pattern(pattern):
@@ -148,17 +153,17 @@ pattern_lua_quoted_string = r'(["\'])((?:\\\1|(?:(?!\1)).)*)(\1)'
 pattern_lua_square_bracket_string = r'\[\[(.*?)\]\]'
 
 # Handles the " ... " or ' ... ' string delimiters
-pattern_lua_quoted = compile_func_call_pattern(parenthesize_pattern(pattern_lua_quoted_string))
+pattern_lua_quoted = compile_func_call_pattern(parenthesize_pattern(pattern_lua_quoted_string), re.NOFLAG)
 
 # Handles the [[ ... ]] string delimiters
-pattern_lua_bracketed = compile_func_call_pattern(parenthesize_pattern(pattern_lua_square_bracket_string))
+pattern_lua_bracketed = compile_func_call_pattern(parenthesize_pattern(pattern_lua_square_bracket_string), re.DOTALL)
 
 # Handles like pattern_lua_quoted, but for single parameter (without parentheses)
 # See https://www.lua.org/pil/5.html for informations about single argument call
-pattern_lua_quoted_single = compile_func_call_pattern(pattern_lua_quoted_string)
+pattern_lua_quoted_single = compile_func_call_pattern(pattern_lua_quoted_string, re.NOFLAG)
 
 # Same as pattern_lua_quoted_single, but for [[ ... ]] string delimiters
-pattern_lua_bracketed_single = compile_func_call_pattern(pattern_lua_square_bracket_string)
+pattern_lua_bracketed_single = compile_func_call_pattern(pattern_lua_square_bracket_string, re.DOTALL)
 
 # Handles "concatenation" .. " of strings"
 pattern_concat = re.compile(r'["\'][\s]*\.\.[\s]*["\']', re.DOTALL)
@@ -220,14 +225,15 @@ def mkdir_p(path):
 # dKeyStrings is a dictionary of localized string to source file sets
 # dOld is a dictionary of existing translations and comments from
 # the previous version of this text
-def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain, templ = None):
+def strings_to_text(dkeyStrings: dict, dOld: dict, mod_name: str, header_comments,
+		textdomain: str|None, templ: list|None, discard_empty: bool):
 	# if textdomain is specified, insert it at the top
 	if textdomain != None:
 		lOut = [textdomain] # argument is full textdomain line
 	# otherwise, use mod name as textdomain automatically
 	else:
 		lOut = [f"# textdomain: {mod_name}"]
-	if templ is not None and templ[2] and (header_comments is None or not header_comments.startswith(templ[2])):
+	if templ != None and templ[2] and (header_comments is None or not header_comments.startswith(templ[2])):
 		# header comments in the template file
 		lOut.append(templ[2])
 	if header_comments is not None:
@@ -242,9 +248,13 @@ def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain, te
 		listForSource.append(key)
 		dGroupedBySource[sourceString] = listForSource
 
+	# Must be False for template.txt !
+	discard_empty = discard_empty and params["discard-empty"]
+
 	lSourceKeys = list(dGroupedBySource.keys())
 	lSourceKeys.sort()
 	for source in lSourceKeys:
+		# source: relative path to the .lua file
 		localizedStrings = dGroupedBySource[source]
 		if params["print-source"]:
 			if lOut[-1] != "":
@@ -253,6 +263,8 @@ def strings_to_text(dkeyStrings, dOld, mod_name, header_comments, textdomain, te
 		for localizedString in localizedStrings:
 			val = dOld.get(localizedString, {})
 			translation = val.get("translation", "")
+			if translation == "" and discard_empty:
+				continue
 			comment = val.get("comment")
 			templ_comment = None
 			if templ:
@@ -296,7 +308,8 @@ def write_template(templ_file, dkeyStrings, mod_name):
 	# read existing template file to preserve comments
 	existing_template = import_tr_file(templ_file)
 
-	text = strings_to_text(dkeyStrings, existing_template[0], mod_name, existing_template[2], existing_template[3])
+	text = strings_to_text(dkeyStrings, existing_template[0], mod_name,
+			existing_template[2], existing_template[3], None, False)
 	mkdir_p(os.path.dirname(templ_file))
 	with open(templ_file, "wt", encoding='utf-8') as template_file:
 		template_file.write(text)
@@ -489,7 +502,7 @@ def update_tr_file(dNew, templ, mod_name, tr_file):
 	dOld = tr_import[0]
 	textOld = tr_import[1]
 
-	textNew = strings_to_text(dNew, dOld, mod_name, tr_import[2], tr_import[3], templ)
+	textNew = strings_to_text(dNew, dOld, mod_name, tr_import[2], tr_import[3], templ, True)
 
 	if textOld and textOld != textNew:
 		print(f"{tr_file} has changed.")
