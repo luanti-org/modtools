@@ -21,7 +21,6 @@ params = {"recursive": False,
 	"break-long-lines": False,
 	"print-source": False,
 	"truncate-unused": False,
-	"discard-empty": False,
 }
 # Available CLI options
 options = {"recursive": ['--recursive', '-r'],
@@ -31,7 +30,6 @@ options = {"recursive": ['--recursive', '-r'],
 	"break-long-lines": ['--break-long-lines', '-b'],
 	"print-source": ['--print-source', '-p'],
 	"truncate-unused": ['--truncate-unused', '-t'],
-	"discard-empty": ['--discard-empty'],
 }
 
 # Strings longer than this will have extra space added between
@@ -86,8 +84,6 @@ DESCRIPTION
 		add output information
 	{', '.join(options["truncate-unused"])}
 		delete unused strings from files
-	{', '.join(options["discard-empty"])}
-		discards empty translation strings to save space
 ''')
 
 def main():
@@ -226,7 +222,7 @@ def mkdir_p(path):
 # dOld is a dictionary of existing translations and comments from
 # the previous version of this text
 def strings_to_text(dkeyStrings: dict, dOld: dict, mod_name: str, header_comments,
-		textdomain: str|None, templ: list|None, discard_empty: bool):
+		textdomain: str|None, templ: list|None):
 	# if textdomain is specified, insert it at the top
 	if textdomain != None:
 		lOut = [textdomain] # argument is full textdomain line
@@ -248,9 +244,6 @@ def strings_to_text(dkeyStrings: dict, dOld: dict, mod_name: str, header_comment
 		listForSource.append(key)
 		dGroupedBySource[sourceString] = listForSource
 
-	# Must be False for template.txt !
-	discard_empty = discard_empty and params["discard-empty"]
-
 	lSourceKeys = list(dGroupedBySource.keys())
 	lSourceKeys.sort()
 	for source in lSourceKeys:
@@ -263,8 +256,6 @@ def strings_to_text(dkeyStrings: dict, dOld: dict, mod_name: str, header_comment
 		for localizedString in localizedStrings:
 			val = dOld.get(localizedString, {})
 			translation = val.get("translation", "")
-			if translation == "" and discard_empty:
-				continue
 			comment = val.get("comment")
 			templ_comment = None
 			if templ:
@@ -309,7 +300,7 @@ def write_template(templ_file, dkeyStrings, mod_name):
 	existing_template = import_tr_file(templ_file)
 
 	text = strings_to_text(dkeyStrings, existing_template[0], mod_name,
-			existing_template[2], existing_template[3], None, False)
+			existing_template[2], existing_template[3], None)
 	mkdir_p(os.path.dirname(templ_file))
 	with open(templ_file, "wt", encoding='utf-8') as template_file:
 		template_file.write(text)
@@ -502,7 +493,7 @@ def update_tr_file(dNew, templ, mod_name, tr_file):
 	dOld = tr_import[0]
 	textOld = tr_import[1]
 
-	textNew = strings_to_text(dNew, dOld, mod_name, tr_import[2], tr_import[3], templ, True)
+	textNew = strings_to_text(dNew, dOld, mod_name, tr_import[2], tr_import[3], templ)
 
 	if textOld and textOld != textNew:
 		print(f"{tr_file} has changed.")
