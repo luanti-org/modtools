@@ -10,6 +10,9 @@ This script converts .txt/.tr files into .pot/.po ones.
 It maintains comments but it ignores the `NOT USED ANYMORE` section.
 Old .txt/.tr files are deleted, so be sure to make a backup first.
 
+Optional argument `--test` runs automated tests to be sure that it works
+correctly.
+
 ## How to use it
 1. Drop the script in the root folder of a mod
 2. Launch it
