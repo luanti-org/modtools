@@ -54,7 +54,7 @@ It also supports new lines, e.g.
 ```lua
 -- S-NOTE: This is a very long comment, because I have to explain you
 -- a lot of different things regarding the string that follows...
-core.chat_send_all("42")
+core.chat_send_all("Foo bar")
 ```
 
 Translations are automatically propagated from `.pot` files into `.po` ones.
