@@ -6,18 +6,21 @@
 # existing .po files via msgmerge.
 
 import argparse
+import contextlib
+import io
 import os
 import pathlib
 import re
 import subprocess
 import sys
 import shutil
+import tempfile
+import unittest
 
 
 LOCALE_DIR_DEFAULT = "locale"
-SNOTE_PATTERNS = [
-    (re.compile(r"^#\. S-NOTE: "), "#. "),
-]
+SNOTE_PATTERN = re.compile(r"^#\. S-NOTE: ")
+SNOTE_REPLACEMENT = "#. "
 
 XGETTEXT_KEYWORDS = [
     "--keyword=S",
@@ -56,16 +59,11 @@ def strip_snote_prefix(pot_path: pathlib.Path) -> None:
 
     """
     text = pot_path.read_text(encoding="utf-8")
-    lines = text.split("\n")
-    new_lines = []
-    for line in lines:
-        for pattern, replacement in SNOTE_PATTERNS:
-            line = pattern.sub(replacement, line)
-        new_lines.append(line)
-    pot_path.write_text("\n".join(new_lines), encoding="utf-8")
+    lines = [SNOTE_PATTERN.sub(SNOTE_REPLACEMENT, line) for line in text.split("\n")]
+    pot_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def run_xgettext(lua_files: list[str], pot_path: pathlib.Path) -> None:
+def run_xgettext(lua_files: list[str], pot_path: pathlib.Path, *, quiet: bool = False) -> None:
     cmd = [
         "xgettext",
         "--language=Lua",
@@ -75,10 +73,13 @@ def run_xgettext(lua_files: list[str], pot_path: pathlib.Path) -> None:
         f"--output={pot_path}",
         *lua_files,
     ]
-    subprocess.run(cmd, check=True)
+    run_kwargs = {"check": True}
+    if quiet:
+        run_kwargs.update({"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True})
+    subprocess.run(cmd, **run_kwargs)
 
 
-def run_msgmerge(po_path: pathlib.Path, pot_path: pathlib.Path) -> None:
+def run_msgmerge(po_path: pathlib.Path, pot_path: pathlib.Path, *, quiet: bool = False) -> None:
     cmd = [
         "msgmerge",
         "--update",
@@ -86,10 +87,13 @@ def run_msgmerge(po_path: pathlib.Path, pot_path: pathlib.Path) -> None:
         str(po_path),
         str(pot_path),
     ]
-    subprocess.run(cmd, check=True)
+    run_kwargs = {"check": True}
+    if quiet:
+        run_kwargs.update({"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True})
+    subprocess.run(cmd, **run_kwargs)
 
 
-def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT) -> None:
+def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT, *, quiet_tools: bool = False) -> None:
     locale_path = pathlib.Path(locale_dir)
     pot_path = locale_path / "template.pot"
 
@@ -102,7 +106,7 @@ def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT) -> None:
 
     locale_path.mkdir(parents=True, exist_ok=True)
 
-    run_xgettext(lua_files, pot_path)
+    run_xgettext(lua_files, pot_path, quiet=quiet_tools)
     print("==> POT file generated")
 
     strip_snote_prefix(pot_path)
@@ -114,7 +118,7 @@ def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT) -> None:
     else:
         for po_file in po_files:
             print(f"==> Updating {po_file.name}")
-            run_msgmerge(po_file, pot_path)
+            run_msgmerge(po_file, pot_path, quiet=quiet_tools)
 
     print("==> Done")
 
@@ -124,218 +128,186 @@ def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT) -> None:
 # ====================================================================
 
 
-def run_tests():
-    """
-    Integrated test suite verifying:
-      1. find_lua_files — file discovery and .git exclusion
-      2. strip_snote_prefix — S-NOTE comment stripping
-      3. XGETTEXT_KEYWORDS — keyword list correctness
-      4. Full pipeline integration (requires xgettext + msgmerge)
-      5. PO format compatibility with the Luanti C++ engine
-    """
-    import tempfile
-
-    passed = 0
-    failed = 0
-    results = []
-
-    def check(test_name, actual, expected, context=""):
-        nonlocal passed, failed
-        ok = actual == expected
-        status = "PASS" if ok else "FAIL"
-        if ok:
-            passed += 1
-        else:
-            failed += 1
-        results.append((test_name, status, context, expected, actual))
-
-    def section(name):
-        results.append(("--- " + name + " ---", "", "", "", ""))
-
-    section("find_lua_files")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.makedirs(os.path.join(tmpdir, "src"))
-        os.makedirs(os.path.join(tmpdir, ".git", "hooks"))
-        os.makedirs(os.path.join(tmpdir, "mods", "mymod"))
-
-        open(os.path.join(tmpdir, "init.lua"), "w").close()
-        open(os.path.join(tmpdir, "src", "util.lua"), "w").close()
-        open(os.path.join(tmpdir, "mods", "mymod", "init.lua"), "w").close()
-        open(os.path.join(tmpdir, ".git", "hooks", "pre-commit.lua"), "w").close()
-        open(os.path.join(tmpdir, "README.md"), "w").close()
-
-        old_cwd = os.getcwd()
-        os.chdir(tmpdir)
-        try:
-            files = find_lua_files(".")
-        finally:
-            os.chdir(old_cwd)
-
-        basenames = [os.path.basename(f) for f in files]
-        check("1.1 finds lua files",
-              sorted(basenames), ["init.lua", "init.lua", "util.lua"])
-
-        full_paths_str = " ".join(files)
-        check("1.2 excludes .git",
-              ".git" not in full_paths_str, True)
-
-        check("1.3 excludes non-lua",
-              any("README" in f for f in files), False)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        old_cwd = os.getcwd()
-        os.chdir(tmpdir)
-        try:
-            files = find_lua_files(".")
-        finally:
-            os.chdir(old_cwd)
-        check("1.4 empty dir returns empty list",
-              files, [])
-
-    section("strip_snote_prefix")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        pot = pathlib.Path(tmpdir) / "test.pot"
-
-        pot.write_text(
-            '#. S-NOTE: Keep this short\n'
-            '#: src/init.lua:10\n'
-            'msgid "Hello"\n'
-            'msgstr ""\n'
-            '\n'
-            '# S-NOTE: Another note\n'
-            '#: S-NOTE: location note\n'
-            '#. Normal comment\n'
-            'msgid "World"\n'
-            'msgstr ""\n',
-            encoding="utf-8",
-        )
-        strip_snote_prefix(pot)
-        content = pot.read_text(encoding="utf-8")
-
-        check("2.1 #. S-NOTE stripped",
-              "#. Keep this short\n" in content, True)
-        check("2.2 # S-NOTE left untouched",
-              "# S-NOTE: Another note\n" in content, True)
-        check("2.3 #: S-NOTE left untouched",
-              "#: S-NOTE: location note\n" in content, True)
-        check("2.4 normal comment preserved",
-              "#. Normal comment\n" in content, True)
-        check("2.5 msgid preserved",
-              'msgid "Hello"' in content, True)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        pot = pathlib.Path(tmpdir) / "clean.pot"
-        original = 'msgid "test"\nmsgstr ""\n'
-        pot.write_text(original, encoding="utf-8")
-        strip_snote_prefix(pot)
-        check("2.7 no S-NOTE is idempotent",
-              pot.read_text(encoding="utf-8"), original)
-
-    section("XGETTEXT_KEYWORDS correctness")
-    expected_keywords = {
-        "--keyword=S",
-        "--keyword=PS:1,2",
-        "--keyword=NS",
-        "--keyword=FS",
-        "--keyword=FPS:1,2",
-        "--keyword=NFS",
-    }
-    check("3.1 keyword count",
-          len(XGETTEXT_KEYWORDS), 6)
-    check("3.2 keyword set matches bash script",
-          set(XGETTEXT_KEYWORDS), expected_keywords)
-
-    check("3.3 S keyword present",
-          "--keyword=S" in XGETTEXT_KEYWORDS, True)
-    check("3.4 PS:1,2 for plural",
-          "--keyword=PS:1,2" in XGETTEXT_KEYWORDS, True)
-
-    section("SNOTE_PATTERNS regex")
-
-    test_lines = [
-        ("#. S-NOTE: Keep short",     "#. Keep short"),
-        ("# S-NOTE: A note",          "# S-NOTE: A note"),
-        ("#: S-NOTE: loc note",        "#: S-NOTE: loc note"),
-        ("#. Normal comment",          "#. Normal comment"),
-        ('#. S-NOTE: has "quotes"',    '#. has "quotes"'),
-        ("#. S-NOTE: ",                "#. "),
-    ]
-    for i, (input_line, expected_line) in enumerate(test_lines):
-        result_line = input_line
-        for pattern, replacement in SNOTE_PATTERNS:
-            result_line = pattern.sub(replacement, result_line)
-        check(f"4.{i+1} SNOTE pattern: {input_line!r}",
-              result_line, expected_line)
-
-    section("PO format compatibility with Luanti C++ engine")
-
-    def simulate_unescape_c(s: str) -> str:
-        """
-        Simulate Translations::unescapeC from src/translation.cpp
-        (simplified for common cases: \\n, \\t, \\\\, \\").
-        """
-        result = []
-        i = 0
-        while i < len(s):
-            if s[i] == '\\' and i + 1 < len(s):
-                nc = s[i + 1]
-                if nc == 'n':
-                    result.append('\n')
-                elif nc == 't':
-                    result.append('\t')
-                elif nc == '\\':
-                    result.append('\\')
-                elif nc == '"':
-                    result.append('"')
-                elif nc == 'r':
-                    result.append('\r')
-                else:
-                    result.append(nc)
-                i += 2
+def _simulate_unescape_c(s: str) -> str:
+    result = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            nc = s[i + 1]
+            if nc == "n":
+                result.append("\n")
+            elif nc == "t":
+                result.append("\t")
+            elif nc == "\\":
+                result.append("\\")
+            elif nc == '"':
+                result.append('"')
+            elif nc == "r":
+                result.append("\r")
             else:
-                result.append(s[i])
-                i += 1
-        return ''.join(result)
+                result.append(nc)
+            i += 2
+        else:
+            result.append(s[i])
+            i += 1
+    return "".join(result)
 
-    escape_cases = [
-        ("Hello",           "Hello"),
-        ("Line1\\nLine2",   "Line1\nLine2"),
-        ('say \\"hi\\"',    'say "hi"'),
-        ("path\\\\file",    "path\\file"),
-        ("tab\\there",      "tab\there"),
-        ("cr\\rline",       "cr\rline"),
-    ]
-    for i, (po_str, expected) in enumerate(escape_cases):
-        unescaped = simulate_unescape_c(po_str)
-        check(f"5.{i+1} C-escape round-trip: {po_str!r}",
-              unescaped, expected)
 
-    check("5.7 engine textdomain fallback documented",
-          True, True,
-          "loadPoEntry falls back to basefilename when no msgctxt")
+@contextlib.contextmanager
+def _pushd(path: str):
+    old_cwd = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(old_cwd)
 
-    check("5.8 engine skips fuzzy entries",
-          True, True,
-          "loadPoTranslation: #, fuzzy causes skip_last/skip = true")
 
-    section("Full pipeline integration")
-    have_xgettext = shutil.which("xgettext") is not None
-    have_msgmerge = shutil.which("msgmerge") is not None
-
-    if not have_xgettext or not have_msgmerge:
-        check("6.0 SKIP: xgettext/msgmerge not installed",
-              "SKIPPED", "SKIPPED",
-              f"xgettext={have_xgettext}, msgmerge={have_msgmerge}")
-    else:
+class FindLuaFilesTests(unittest.TestCase):
+    def test_finds_lua_and_excludes_git(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            os.chdir(tmpdir)
-            try:
+            os.makedirs(os.path.join(tmpdir, "src"))
+            os.makedirs(os.path.join(tmpdir, ".git", "hooks"))
+            os.makedirs(os.path.join(tmpdir, "mods", "mymod"))
+            pathlib.Path(tmpdir, "init.lua").touch()
+            pathlib.Path(tmpdir, "src", "util.lua").touch()
+            pathlib.Path(tmpdir, "mods", "mymod", "init.lua").touch()
+            pathlib.Path(tmpdir, ".git", "hooks", "pre-commit.lua").touch()
+            pathlib.Path(tmpdir, "README.md").touch()
+
+            with _pushd(tmpdir):
+                files = find_lua_files(".")
+
+            basenames = sorted(os.path.basename(f) for f in files)
+            self.assertEqual(basenames, ["init.lua", "init.lua", "util.lua"])
+            self.assertNotIn(".git", " ".join(files))
+            self.assertFalse(any("README" in f for f in files))
+
+    def test_empty_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _pushd(tmpdir):
+                files = find_lua_files(".")
+            self.assertEqual(files, [])
+
+
+class StripSnotePrefixTests(unittest.TestCase):
+    def test_strips_only_translator_comment_prefix(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pot = pathlib.Path(tmpdir) / "test.pot"
+            pot.write_text(
+                '#. S-NOTE: Keep this short\n'
+                '#: src/init.lua:10\n'
+                'msgid "Hello"\n'
+                'msgstr ""\n'
+                '\n'
+                '# S-NOTE: Another note\n'
+                '#: S-NOTE: location note\n'
+                '#. Normal comment\n'
+                'msgid "World"\n'
+                'msgstr ""\n',
+                encoding="utf-8",
+            )
+
+            strip_snote_prefix(pot)
+            content = pot.read_text(encoding="utf-8")
+            self.assertIn("#. Keep this short\n", content)
+            self.assertIn("# S-NOTE: Another note\n", content)
+            self.assertIn("#: S-NOTE: location note\n", content)
+            self.assertIn("#. Normal comment\n", content)
+            self.assertIn('msgid "Hello"', content)
+
+    def test_idempotent_when_no_matching_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pot = pathlib.Path(tmpdir) / "clean.pot"
+            original = 'msgid "test"\nmsgstr ""\n'
+            pot.write_text(original, encoding="utf-8")
+            strip_snote_prefix(pot)
+            self.assertEqual(pot.read_text(encoding="utf-8"), original)
+
+    def test_multiline_and_empty_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pot = pathlib.Path(tmpdir) / "edge.pot"
+            pot.write_text(
+                '#. S-NOTE: Line one of multi-line comment\n'
+                '#. S-NOTE: Line two of multi-line comment\n'
+                'msgid "Multi"\n'
+                'msgstr ""\n'
+                '\n'
+                '# Not an S-NOTE comment\n'
+                'msgid "Other"\n'
+                'msgstr ""\n',
+                encoding="utf-8",
+            )
+            strip_snote_prefix(pot)
+            content = pot.read_text(encoding="utf-8")
+            self.assertIn("#. Line one of multi-line comment\n", content)
+            self.assertIn("#. Line two of multi-line comment\n", content)
+            self.assertIn("# Not an S-NOTE comment\n", content)
+
+            empty = pathlib.Path(tmpdir) / "empty.pot"
+            empty.write_text("", encoding="utf-8")
+            strip_snote_prefix(empty)
+            self.assertEqual(empty.read_text(encoding="utf-8"), "")
+
+
+class KeywordsTests(unittest.TestCase):
+    def test_keyword_set(self):
+        expected = {
+            "--keyword=S",
+            "--keyword=PS:1,2",
+            "--keyword=NS",
+            "--keyword=FS",
+            "--keyword=FPS:1,2",
+            "--keyword=NFS",
+        }
+        self.assertEqual(len(XGETTEXT_KEYWORDS), 6)
+        self.assertEqual(set(XGETTEXT_KEYWORDS), expected)
+
+    def test_snote_patterns(self):
+        test_lines = [
+            ("#. S-NOTE: Keep short", "#. Keep short"),
+            ("# S-NOTE: A note", "# S-NOTE: A note"),
+            ("#: S-NOTE: loc note", "#: S-NOTE: loc note"),
+            ("#. Normal comment", "#. Normal comment"),
+            ('#. S-NOTE: has "quotes"', '#. has "quotes"'),
+            ("#. S-NOTE: ", "#. "),
+        ]
+        for input_line, expected_line in test_lines:
+            result_line = SNOTE_PATTERN.sub(SNOTE_REPLACEMENT, input_line)
+            self.assertEqual(result_line, expected_line)
+
+
+class PoCompatibilityTests(unittest.TestCase):
+    def test_common_c_escapes_roundtrip(self):
+        escape_cases = [
+            ("Hello", "Hello"),
+            ("Line1\\nLine2", "Line1\nLine2"),
+            ('say \\"hi\\"', 'say "hi"'),
+            ("path\\\\file", "path\\file"),
+            ("tab\\there", "tab\there"),
+            ("cr\\rline", "cr\rline"),
+        ]
+        for po_str, expected in escape_cases:
+            self.assertEqual(_simulate_unescape_c(po_str), expected)
+
+class UpdateTranslationsTests(unittest.TestCase):
+    def test_no_lua_files_message(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _pushd(tmpdir):
+                captured = io.StringIO()
+                with contextlib.redirect_stdout(captured):
+                    update_translations("locale")
+            self.assertIn("No .lua files found", captured.getvalue())
+
+    @unittest.skipUnless(
+        shutil.which("xgettext") is not None and shutil.which("msgmerge") is not None,
+        "xgettext/msgmerge not installed",
+    )
+    def test_full_pipeline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _pushd(tmpdir):
                 locale_dir = pathlib.Path("locale")
                 locale_dir.mkdir()
-
                 pathlib.Path("init.lua").write_text(
                     'local S = core.get_translator("testmod")\n'
                     'local NS = function(s) return s end\n'
@@ -352,7 +324,6 @@ def run_tests():
                     'local msg = S("Line 1\\nLine 2")\n',
                     encoding="utf-8",
                 )
-
                 (locale_dir / "it.po").write_text(
                     'msgid ""\n'
                     'msgstr ""\n'
@@ -363,126 +334,26 @@ def run_tests():
                     'msgstr "Ciao mondo!"\n',
                     encoding="utf-8",
                 )
-
-                update_translations("locale")
+                update_translations("locale", quiet_tools=True)
 
                 pot_path = locale_dir / "template.pot"
-                check("6.1 POT file created",
-                      pot_path.exists(), True)
-
+                self.assertTrue(pot_path.exists())
                 pot_content = pot_path.read_text(encoding="utf-8")
-
-                check("6.2 Hello world in POT",
-                      'msgid "Hello world!"' in pot_content, True)
-                check("6.3 Goodbye in POT",
-                      'msgid "Goodbye!"' in pot_content, True)
-                check("6.4 NS string in POT",
-                      'msgid "Not translated here"' in pot_content, True)
-
-                check("6.5 S-NOTE prefix stripped",
-                      "#. S-NOTE:" not in pot_content, True)
-
-                check("6.6 comment content preserved",
-                      "Keep this greeting short" in pot_content, True)
+                self.assertIn('msgid "Hello world!"', pot_content)
+                self.assertIn('msgid "Goodbye!"', pot_content)
+                self.assertIn('msgid "Not translated here"', pot_content)
+                self.assertNotIn("#. S-NOTE:", pot_content)
+                self.assertIn("Keep this greeting short", pot_content)
 
                 po_content = (locale_dir / "it.po").read_text(encoding="utf-8")
-                check("6.7 PO file still contains translation",
-                      'msgstr "Ciao mondo!"' in po_content, True)
-                check("6.8 PO file updated with new strings",
-                      "Goodbye" in po_content, True)
+                self.assertIn('msgstr "Ciao mondo!"', po_content)
+                self.assertIn("Goodbye", po_content)
 
-            finally:
-                os.chdir(old_cwd)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            os.chdir(tmpdir)
-            try:
-                old_stdout = sys.stdout
-                from io import StringIO
-                captured = StringIO()
-                sys.stdout = captured
-                update_translations("locale")
-                sys.stdout = old_stdout
-                output = captured.getvalue()
-                check("6.9 no lua files message",
-                      "No .lua files found" in output, True)
-            finally:
-                os.chdir(old_cwd)
-                sys.stdout = old_stdout
-
-    section("Plural keyword verification (PS/FPS)")
-
-    check("7.1 PS extracts singular+plural",
-          "--keyword=PS:1,2" in XGETTEXT_KEYWORDS, True,
-          "PS(singular, plural) -> msgid + msgid_plural")
-
-    check("7.2 FPS extracts singular+plural",
-          "--keyword=FPS:1,2" in XGETTEXT_KEYWORDS, True,
-          "FPS(singular, plural) -> msgid + msgid_plural (formspec-escaped)")
-
-    check("7.3 NS is simple keyword",
-          "--keyword=NS" in XGETTEXT_KEYWORDS, True,
-          "NS(s) returns s unchanged, but string is extracted for .pot")
-
-    section("Edge cases for strip_snote_prefix")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        pot = pathlib.Path(tmpdir) / "edge.pot"
-
-        pot.write_text(
-            '#. S-NOTE: Line one of multi-line comment\n'
-            '#. S-NOTE: Line two of multi-line comment\n'
-            'msgid "Multi"\n'
-            'msgstr ""\n'
-            '\n'
-            '# Not an S-NOTE comment\n'
-            'msgid "Other"\n'
-            'msgstr ""\n',
-            encoding="utf-8",
-        )
-        strip_snote_prefix(pot)
-        content = pot.read_text(encoding="utf-8")
-
-        check("8.1 multi-line S-NOTE first line stripped",
-              "#. Line one of multi-line comment\n" in content, True)
-        check("8.2 multi-line S-NOTE second line stripped",
-              "#. Line two of multi-line comment\n" in content, True)
-        check("8.3 non-SNOTE comment untouched",
-              "# Not an S-NOTE comment\n" in content, True)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        pot = pathlib.Path(tmpdir) / "empty.pot"
-        pot.write_text("", encoding="utf-8")
-        strip_snote_prefix(pot)
-        check("8.4 empty file handled",
-              pot.read_text(encoding="utf-8"), "")
-
-    print("\n" + "=" * 72)
-    print("TEST RESULTS")
-    print("=" * 72)
-
-    for test_name, status, context, expected, actual in results:
-        if status == "":
-            print(f"\n{test_name}")
-            continue
-        marker = "[PASS]" if status == "PASS" else "[FAIL]"
-        print(f"  {marker} {test_name}")
-        if context:
-            print(f"         {context}")
-        if status == "FAIL":
-            print(f"         expected: {expected!r}")
-            print(f"         actual:   {actual!r}")
-
-    print(f"\n{'=' * 72}")
-    print(f"Total: {passed + failed} | Passed: {passed} | Failed: {failed}")
-    print(f"{'=' * 72}")
-
-    if failed > 0:
-        sys.exit(1)
-    else:
-        print("All tests passed.")
-        sys.exit(0)
+def run_tests():
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    sys.exit(0 if result.wasSuccessful() else 1)
 
 
 # ====================================================================
