@@ -1,5 +1,7 @@
 # `mod_translation_updater.py`—Luanti Mod Translation Updater
 
+> BEWARE: if you're using Luanti 5.10.0+, consider using `po_translation_updater.py` instead!
+
 This Python script is intended for use with localized Luanti mods, i.e., mods that use
 `*.tr` and contain translatable strings of the form `S("This string can be translated")`.
 It extracts the strings from the mod's source code and updates the localization files
