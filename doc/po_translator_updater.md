@@ -59,8 +59,11 @@ core.chat_send_all("Foo bar")
 
 Translations are automatically propagated from `.pot` files into `.po` ones.
 
-## How to use it
+### How to use it
 1. Drop the script in the root folder of a mod
 2. Launch it
 3. ..
 4. Profit
+
+### Automated tests
+Run the script with `--test` for automated tests.
