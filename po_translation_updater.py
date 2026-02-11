@@ -49,6 +49,23 @@ def find_lua_files(root: str) -> list[str]:
     result.sort()
     return result
 
+def normalize_printed_paths(file: str) -> None:
+    pattern = re.compile(r'^(#:\s*)(.+)', flags=re.MULTILINE)
+    path = pathlib.Path(file)
+    content = path.read_text(encoding="utf-8")
+
+    def replacer(match):
+        prefix = match.group(1)
+        rest = match.group(2)
+
+        rest = rest.replace("\\", "/")
+        rest = re.sub(r'^\.\/', '', rest)
+
+        return prefix + rest
+
+    content = pattern.sub(replacer, content)
+    path.write_text(content, encoding="utf-8", newline="\n")
+
 
 def strip_snote_prefix(pot_path: pathlib.Path) -> None:
     """
@@ -77,6 +94,9 @@ def run_xgettext(lua_files: list[str], pot_path: pathlib.Path, *, quiet: bool = 
     if quiet:
         run_kwargs.update({"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True})
     subprocess.run(cmd, **run_kwargs)
+
+    if sys.platform.startswith("win"): # always use POSIX paths
+	    normalize_printed_paths(pot_path)
 
 
 def run_msgmerge(po_path: pathlib.Path, pot_path: pathlib.Path, *, quiet: bool = False) -> None:
