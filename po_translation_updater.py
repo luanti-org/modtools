@@ -9,7 +9,7 @@ import argparse
 import contextlib
 import io
 import os
-import pathlib
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -51,7 +51,7 @@ def find_lua_files(root: str) -> list[str]:
 
 def normalize_printed_paths(file: str) -> None:
     pattern = re.compile(r'^(#:\s*)(.+)', flags=re.MULTILINE)
-    path = pathlib.Path(file)
+    path = Path(file)
     content = path.read_text(encoding="utf-8")
 
     def replacer(match):
@@ -67,7 +67,7 @@ def normalize_printed_paths(file: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
-def strip_snote_prefix(pot_path: pathlib.Path) -> None:
+def strip_snote_prefix(pot_path: Path) -> None:
     """
     Strip the 'S-NOTE: ' prefix from comment lines in a .pot file.
 
@@ -80,7 +80,7 @@ def strip_snote_prefix(pot_path: pathlib.Path) -> None:
     pot_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def run_xgettext(lua_files: list[str], pot_path: pathlib.Path, *, quiet: bool = False) -> None:
+def run_xgettext(lua_files: list[str], pot_path: Path, *, quiet: bool = False) -> None:
     cmd = [
         "xgettext",
         "--language=Lua",
@@ -99,7 +99,7 @@ def run_xgettext(lua_files: list[str], pot_path: pathlib.Path, *, quiet: bool = 
 	    normalize_printed_paths(pot_path)
 
 
-def run_msgmerge(po_path: pathlib.Path, pot_path: pathlib.Path, *, quiet: bool = False) -> None:
+def run_msgmerge(po_path: Path, pot_path: Path, *, quiet: bool = False) -> None:
     cmd = [
         "msgmerge",
         "--update",
@@ -114,7 +114,7 @@ def run_msgmerge(po_path: pathlib.Path, pot_path: pathlib.Path, *, quiet: bool =
 
 
 def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT, *, quiet_tools: bool = False) -> None:
-    locale_path = pathlib.Path(locale_dir)
+    locale_path = Path(locale_dir)
     pot_path = locale_path / "template.pot"
 
     print("==> Extracting Lua strings (Luanti)")
@@ -189,11 +189,11 @@ class FindLuaFilesTests(unittest.TestCase):
             os.makedirs(os.path.join(tmpdir, "src"))
             os.makedirs(os.path.join(tmpdir, ".git", "hooks"))
             os.makedirs(os.path.join(tmpdir, "mods", "mymod"))
-            pathlib.Path(tmpdir, "init.lua").touch()
-            pathlib.Path(tmpdir, "src", "util.lua").touch()
-            pathlib.Path(tmpdir, "mods", "mymod", "init.lua").touch()
-            pathlib.Path(tmpdir, ".git", "hooks", "pre-commit.lua").touch()
-            pathlib.Path(tmpdir, "README.md").touch()
+            Path(tmpdir, "init.lua").touch()
+            Path(tmpdir, "src", "util.lua").touch()
+            Path(tmpdir, "mods", "mymod", "init.lua").touch()
+            Path(tmpdir, ".git", "hooks", "pre-commit.lua").touch()
+            Path(tmpdir, "README.md").touch()
 
             with _pushd(tmpdir):
                 files = find_lua_files(".")
@@ -213,7 +213,7 @@ class FindLuaFilesTests(unittest.TestCase):
 class StripSnotePrefixTests(unittest.TestCase):
     def test_strips_only_translator_comment_prefix(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            pot = pathlib.Path(tmpdir) / "test.pot"
+            pot = Path(tmpdir) / "test.pot"
             pot.write_text(
                 '#. S-NOTE: Keep this short\n'
                 '#: src/init.lua:10\n'
@@ -238,7 +238,7 @@ class StripSnotePrefixTests(unittest.TestCase):
 
     def test_idempotent_when_no_matching_lines(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            pot = pathlib.Path(tmpdir) / "clean.pot"
+            pot = Path(tmpdir) / "clean.pot"
             original = 'msgid "test"\nmsgstr ""\n'
             pot.write_text(original, encoding="utf-8")
             strip_snote_prefix(pot)
@@ -246,7 +246,7 @@ class StripSnotePrefixTests(unittest.TestCase):
 
     def test_multiline_and_empty_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            pot = pathlib.Path(tmpdir) / "edge.pot"
+            pot = Path(tmpdir) / "edge.pot"
             pot.write_text(
                 '#. S-NOTE: Line one of multi-line comment\n'
                 '#. S-NOTE: Line two of multi-line comment\n'
@@ -264,7 +264,7 @@ class StripSnotePrefixTests(unittest.TestCase):
             self.assertIn("#. Line two of multi-line comment\n", content)
             self.assertIn("# Not an S-NOTE comment\n", content)
 
-            empty = pathlib.Path(tmpdir) / "empty.pot"
+            empty = Path(tmpdir) / "empty.pot"
             empty.write_text("", encoding="utf-8")
             strip_snote_prefix(empty)
             self.assertEqual(empty.read_text(encoding="utf-8"), "")
@@ -326,9 +326,9 @@ class UpdateTranslationsTests(unittest.TestCase):
     def test_full_pipeline(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with _pushd(tmpdir):
-                locale_dir = pathlib.Path("locale")
+                locale_dir = Path("locale")
                 locale_dir.mkdir()
-                pathlib.Path("init.lua").write_text(
+                Path("init.lua").write_text(
                     'local S = core.get_translator("testmod")\n'
                     'local NS = function(s) return s end\n'
                     '\n'
