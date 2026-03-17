@@ -113,7 +113,7 @@ def run_msgmerge(po_path: Path, pot_path: Path, *, quiet: bool = False) -> None:
     subprocess.run(cmd, **run_kwargs)
 
 
-def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT, *, quiet_tools: bool = False) -> None:
+def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT, *, skip_po: bool = False, quiet_tools: bool = False) -> None:
     locale_path = Path(locale_dir)
     pot_path = locale_path / "template.pot"
 
@@ -132,13 +132,14 @@ def update_translations(locale_dir: str = LOCALE_DIR_DEFAULT, *, quiet_tools: bo
     strip_snote_prefix(pot_path)
     print(f"==> S-NOTE prefix stripped in {pot_path}")
 
-    po_files = sorted(locale_path.glob("*.po"))
-    if not po_files:
-        print(f"No .po files found in {locale_dir}")
-    else:
-        for po_file in po_files:
-            print(f"==> Updating {po_file.name}")
-            run_msgmerge(po_file, pot_path, quiet=quiet_tools)
+    if not skip_po:
+        po_files = sorted(locale_path.glob("*.po"))
+        if not po_files:
+            print(f"No .po files found in {locale_dir}")
+        else:
+            for po_file in po_files:
+                print(f"==> Updating {po_file.name}")
+                run_msgmerge(po_file, pot_path, quiet=quiet_tools)
 
     print("==> Done")
 
@@ -399,9 +400,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Run the built-in test suite instead of updating translations.",
     )
+    parser.add_argument(
+        "-s", "--skip-po",
+        action="store_true",
+        help="Skip the update of .po files",
+    )
     args = parser.parse_args()
 
     if args.test:
         run_tests()
     else:
-        update_translations(args.locale_dir)
+        update_translations(args.locale_dir, skip_po=args.skip_po)

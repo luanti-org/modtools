@@ -65,5 +65,6 @@ Translations are automatically propagated from `.pot` files into `.po` ones.
 3. ..
 4. Profit
 
-### Automated tests
-Run the script with `--test` for automated tests.
+### Flags
+* `-s`, `--skip-po`: skips the update of .po files
+* `--test`: runs automated tests
