@@ -22,7 +22,7 @@ Here is the list of all recognized function names. All functions return a string
 * `NFS`: Returns a formspec-escaped version of the input, but not translated.
          Supported for convenience.
 
-Here is the boilerplate code you have to add at the top of your source code file:
+Template boilerplate for mods. Copy what you need:
 
     local S = core.get_translator("<textdomain>")
     local S, PS = core.get_translator("<textdomain>")
@@ -33,11 +33,13 @@ Here is the boilerplate code you have to add at the top of your source code file
     
 ### A minimal example
 
-This minimal code example sends "Hello world!" to all players, but translated according to
-each player's language:
+This minimal code example sends "Hello world!" to a player when they log in,
+translated according to the language of their client:
 
     local S = core.get_translator("example")
-    core.chat_send_all(S("Hello world!"))
+    core.register_on_joinplayer(function(player)
+        core.chat_send_player(player:get_player_name(), S("Hello world!"))
+    end)
     
 ### Leaving notes for translators
 
@@ -61,10 +63,10 @@ Translations are automatically propagated from `.pot` files into `.po` ones.
 
 ### How to use it
 1. Drop the script in the root folder of a mod
-2. Launch it
+2. Run it through python
 3. ..
 4. Profit
 
-### Flags
+### Command-line Parameters
 * `-s`, `--skip-po`: skips the update of .po files
 * `--test`: runs automated tests
